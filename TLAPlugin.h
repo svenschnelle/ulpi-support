@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 
-#define SEQUENCE_TEXT_WIDTH 64
+#define SEQUENCE_TEXT_WIDTH 128
 
 #define GROUP(name, type, _width, flags, symbolfile) \
 	{ .groupname = name,\

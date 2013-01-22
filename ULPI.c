@@ -47,7 +47,6 @@ static const unsigned short crc16tab[256]= {
 };
 
 static FILE *logfile = NULL;
-static int idsel_values[16] = { 15, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
 
 const char *modeinfo_names[MODEINFO_MAX] = {
 	"MAX_BUS",
@@ -76,7 +75,9 @@ static const char *rxevents[] = {
 #define ULPI_DIR 0x01
 #define ULPI_NXT 0x02
 #define ULPI_STP 0x04
-#define ULPI_RST 0x08
+#define ULPI_RXCMDVALID 0x08
+#define ULPI_PID 0x10
+#define ULPI_DATAVALID 0x20
 
 typedef enum {
 	USB_PID_XXX=0xf0,
@@ -117,16 +118,45 @@ typedef enum {
 struct groupinfo groupinfo[] = {
 	GROUP("DATA", GROUP_TYPE_INPUT, 8, 0, NULL),
 	GROUP("CTRL", GROUP_TYPE_INPUT, 4, 0, NULL),
-	GROUP("Cycle Type", GROUP_TYPE_FAKE_GROUP, 8, 8, "ULPI_Cycle.tsf"),
+	GROUP("PID", GROUP_TYPE_FAKE_GROUP, 4, 4, "PID.tsf"),
+	GROUP("ADDR", GROUP_TYPE_FAKE_GROUP, 7, 7, NULL),
+	GROUP("EP", GROUP_TYPE_FAKE_GROUP, 4, 4, NULL),
+	GROUP("DATA size", GROUP_TYPE_FAKE_GROUP, 32, 32, NULL),
 	GROUP("Decoded cycle", GROUP_TYPE_MNEMONIC, SEQUENCE_TEXT_WIDTH, SEQUENCE_TEXT_WIDTH, NULL)
 };
+
+#define GROUP_PID 2
+#define GROUP_ADDR 3
+#define GROUP_EP 4
+#define GROUP_DATA_SIZE 5
 
 struct businfo businfo[] = { { .groupcount = ARRAY_SIZE(groupinfo) } };
 
 char *onoff[] = { "Off", "On", NULL, NULL };
 
-struct modeinfo modeinfo[] = { { "Show SOF packets", onoff, 1, 0 },
-                               { "Show buffers", onoff, 2, 0 } };
+#define SHOW_SOF 0
+#define SHOW_IN 1
+#define SHOW_OUT 2
+#define SHOW_SETUP 3
+#define SHOW_NAK 4
+#define SHOW_ACK 5
+#define SHOW_NYET 6
+#define SHOW_DATA 7
+#define SHOW_STALL 8
+#define SHOW_PING 9
+#define SHOW_BUF 10
+
+struct modeinfo modeinfo[] = { { "Show SOF packets", onoff, SHOW_SOF, 0 },
+			       { "Show IN packets", onoff, SHOW_IN, 0 },
+			       { "Show OUT packets", onoff, SHOW_OUT, 0 },
+			       { "Show SETUP packets", onoff, SHOW_SETUP, 0 },
+			       { "Show NAK packets", onoff, SHOW_NAK, 0 },
+			       { "Show ACK packets", onoff, SHOW_ACK, 0 },
+			       { "Show NYET packets", onoff, SHOW_NYET, 0 },
+			       { "Show DATA packets", onoff, SHOW_DATA, 0 },
+			       { "Show PING packets", onoff, SHOW_PING, 0 },
+			       { "Show STALL packets", onoff, SHOW_STALL, 0 },
+                               { "Show buffers", onoff, SHOW_BUF, 0 } };
 
 struct stringmodevalues stringmodevalues[] = { { "All cycles", DISPLAY_ATTRIBUTE_ALL },
                                                { "Decoded cycles", DISPLAY_ATTRIBUTE_DECODED },
@@ -194,95 +224,6 @@ static uint8_t ulpi_get_data_group(struct pctx *pctx, int seq)
 	return pctx->func.LAGroupValue(pctx->lactx, seq, ULPI_GROUP_DATA);
 }
 
-static int ulpi_is_rxcmd(uint8_t ctrl)
-{
-	return (!(ctrl & ULPI_NXT) && ctrl & ULPI_DIR);
-}
-
-static int ulpi_is_turnaround(struct pctx *pctx, int seq, uint8_t ctrl)
-{
-	uint8_t ctrl2;
-
-	seq = pctx->func.LAFindSeq(pctx->lactx, seq, -1, -1);
-	
-	if (seq < 0)
-		return 0;
-
-	ctrl2 = ulpi_get_ctrl_group(pctx, seq);
-
-	return ((ctrl & ULPI_DIR) != (ctrl2 & ULPI_DIR));
-
-}
-
-static int ulpi_is_rxdata(uint8_t ctrl)
-{
-	return ((ctrl & ULPI_NXT) &&
-		(ctrl & ULPI_DIR));
-}
-
-static int ulpi_find_start_of_packet(struct pctx *pctx, int seq)
-{
-	uint8_t ctrl, data;
-	uint8_t previous_rxcmd = ulpi_get_ctrl_group(pctx, seq);
-	uint8_t previous_data = ulpi_get_data_group(pctx, seq);
-	int seenactive = -1, seq2;
-
-	LogDebug(pctx, 8, "%s: %d\n", __FUNCTION__, seq);
-
-	if (!ulpi_is_rxcmd(previous_rxcmd)) {
-		LogDebug(pctx, 8, "%s: not rxcmd\n", __FUNCTION__);
-		return -1;
-	}
-
-	if (ULPI_EVENT(previous_data) != ULPI_EVENT_NONE) {
-		LogDebug(pctx, 8, "%s: not none event\n", __FUNCTION__);
-		return -1;
-	}
-
-	for(;;) {
-		seq = pctx->func.LAFindSeq(pctx->lactx, seq, -1, -1);
-		if (seq < 0)
-			break;
-
-		data = ulpi_get_data_group(pctx, seq);
-		ctrl = ulpi_get_ctrl_group(pctx, seq);
-
-		if ((ctrl & ULPI_NXT) &&
-		    (ctrl & ULPI_DIR)) {
-			seq2 = pctx->func.LAFindSeq(pctx->lactx, seq, -1, -1);
-			if (seq2 >= 0) {
-				ctrl = ulpi_get_ctrl_group(pctx, seq2);
-				if (!(ctrl & ULPI_NXT) &&
-				    !(ctrl & ULPI_DIR))
-					seenactive = pctx->func.LAFindSeq(pctx->lactx, seq, 1, -1);
-				continue;
-			}
-		}
-
-		if (!ulpi_is_rxcmd(ctrl))
-			continue;
-
-		if (ulpi_is_turnaround(pctx, seq, ctrl))
-			continue;
-
-		switch(ULPI_EVENT(data)) {
-		case ULPI_EVENT_NONE:
-			return seenactive;
-
-		case ULPI_EVENT_RXACTIVE:
-			seenactive = pctx->func.LAFindSeq(pctx->lactx, seq, 1, -1);
-			break;
-
-		case ULPI_EVENT_RXERROR:
-			break;
-
-		case  ULPI_EVENT_HOSTDISCONNECT:
-			break;
-		}
-	}
-	return seq;
-}
-
 static const char *pidnames[] = {
 	"XXX",
 	"OUT",
@@ -318,27 +259,51 @@ static struct sequence *attach_sequence(struct sequence *in, struct sequence *se
 	return firstseq;
 }
 
-static struct sequence *dump_data_to_sequence(struct pctx *pctx, uint8_t *bytes,
-					      int bytecnt)
+static void dump_data_to_sequence(struct pctx *pctx,
+				  struct sequence **firstseq, uint8_t *bytes,
+				  int bytecnt)
 {
-	struct sequence *firstseq = NULL, *seqinfo;
+	struct sequence *seqinfo;
 	int i, j;
+	uint8_t c;
 
 	for(i = 0; i < bytecnt; i+= 16) {
 		seqinfo = get_sequence(pctx);
-		seqinfo->flags = DISPLAY_ATTRIBUTE_HIGHLEVEL;
-		LogDebug(pctx, 5, "i: %d\n", i);
-		for(j = 0; j < MIN(16, bytecnt); j++) {
-			LogDebug(pctx, 5, "j: %d\n", j);
-			sprintf(seqinfo->textp + j * 3, "%02X ", bytes[j+i]);
+		seqinfo->flags = DISPLAY_ATTRIBUTE_DECODED;
+		memset(seqinfo->textp, ' ', 64);
+		sprintf(seqinfo->textp, "0x%04X: ", i);
+		for(j = 0; j < 16; j++) {
+			if (i + j >= bytecnt)
+				break;
+			c = bytes[j+i];
+			sprintf(seqinfo->textp + 8 + j * 3, "%02X ", c);
+			seqinfo->textp[8 + j * 3 + 3] = ' ';
+			if (c > 0x20 && c < 0x7f)
+				sprintf(seqinfo->textp + 57 + j, "%c", c);
+			else
+				sprintf(seqinfo->textp + 57 + j, ".");
 		}
-		bytecnt -= j;
-		firstseq = attach_sequence(firstseq, seqinfo);
+		*firstseq = attach_sequence(*firstseq, seqinfo);
 	}
-	return firstseq;
 }
 
 #define SHIFT (sizeof(uint32_t) * 8 - 1)
+
+static void sequence_printf(struct pctx *pctx, int flags,
+			    struct sequence **seq, const char *fmt, ...)
+{
+	struct sequence *firstseq, *seqinfo = get_sequence(pctx);
+	va_list va;
+
+	
+	va_start(va, fmt);
+	vsnprintf(seqinfo->textp, SEQUENCE_TEXT_WIDTH, fmt, va);
+	va_end(va);
+
+	seqinfo->flags = flags;
+	firstseq = attach_sequence(*seq, seqinfo);
+	*seq = firstseq;
+}
 
 static uint32_t crc5(uint32_t data, unsigned int bitcnt)
 {
@@ -371,161 +336,503 @@ static int crc16(void *buf, int len)
 	return crc;
 }
 
-static struct sequence *ulpi_decode_packet(struct pctx *pctx, int startseq)
+static int get_usb_packet(struct pctx *pctx, int startseq, uint8_t *buf, int maxlen)
 {
-	struct sequence *firstseq = NULL, *seqinfo = NULL;
-	uint16_t data16 = 0, tmp;
-	uint8_t ctrl, data, pid = 0, endp;
-	int bytecnt, seq;
-	uint8_t bytes[1024];
+	int nextseq, seq, len = 0;
+	uint32_t ctrl;
 
-	for(bytecnt = 0, seq = startseq; seq > 0;
-	    seq = pctx->func.LAFindSeq(pctx->lactx, seq, 1, -1)) {
+	seq = startseq;
 
-		ctrl = ulpi_get_ctrl_group(pctx, seq);
-		if (ulpi_is_rxcmd(ctrl)) {
-
-			data = ulpi_get_data_group(pctx, seq);
-			if (ULPI_EVENT(data) == ULPI_EVENT_RXACTIVE)
-				continue;
-
-			if (bytecnt > 0 && !pctx->show_sof && pid == USB_PID_SOF)
-				return NULL;
-
-			seqinfo = get_sequence(pctx);
-			seqinfo->flags = DISPLAY_ATTRIBUTE_HIGHLEVEL;
-
-			if (bytecnt == 0) {
-				sprintf(seqinfo->textp, "ERROR: NO PID");
-				seqinfo->flags = DISPLAY_ATTRIBUTE_ABORTED;
-				return attach_sequence(firstseq, seqinfo);
-			}
-
-			if (((pid >> 4) & 0x0f) != (~pid & 0x0f)) {
-				sprintf(seqinfo->textp, "ERROR: INVALID PID 0x%02X", pid);
-				seqinfo->flags = DISPLAY_ATTRIBUTE_ABORTED;
-				return attach_sequence(firstseq, seqinfo);
-			}
-
-			switch(pid) {
-			case USB_PID_ACK:
-			case USB_PID_NAK:
-			case USB_PID_STALL:
-			case USB_PID_NYET:
-				/* 1 byte pids */
-				sprintf(seqinfo->textp, "PID %s", pidnames[pid & 0x0f]);
-				break;
-
-			case USB_PID_DATA0:
-			case USB_PID_DATA1:
-			case USB_PID_DATA2:
-			case USB_PID_MDATA:
-				sprintf(seqinfo->textp, "PID %s, %d bytes",
-					pidnames[pid & 0x0f], bytecnt-3);
-				if (bytecnt > 3 && pctx->show_buffers)
-					seqinfo->next = dump_data_to_sequence(pctx, bytes + 1, bytecnt-3);
-				if (bytecnt > 3) {
-					LogDebug(pctx, 5,"CRC16: %04X, should be %02X%02X\n", crc16(bytes+1, bytecnt - 3),
-						 bytes[bytecnt-2], bytes[bytecnt-1]);
-				}
-				break;
-				
-			case USB_PID_SETUP:
-			case USB_PID_OUT:
-			case USB_PID_IN:
-			case USB_PID_PING:
-				if (bytecnt >= 2) {
-					sprintf(seqinfo->textp, "PID %s, Address %d, EP %d, CRC5 %d",
-						pidnames[pid & 0x0f], (data16 >> 9) & 0x8f,
-						(data >> 5) & 0x0f, data & 0x1f);
-				} else {
-					sprintf(seqinfo->textp, "PID %s, Short packet (%d bytes)",
-						pidnames[pid & 0x0f], bytecnt);
-					seqinfo->flags = DISPLAY_ATTRIBUTE_ABORTED;
-				}
-				break;
-
-			case USB_PID_SOF:		
-
-				tmp = (data16 >> 8) & 0xff;
-				tmp |= (data16 & 0xff) << 8;
-				if (bytecnt >= 2) {
-					sprintf(seqinfo->textp, "PID %s, FRAME# %04x, CRC5 0x%02x, %02x",
-						pidnames[pid & 0x0f], tmp & 0x7ff, (tmp >> 10) & 0x1f, crc5(tmp & 0x7ff, 11));
-				} else {
-					sprintf(seqinfo->textp, "PID %s, Short packet (%d bytes)",
-						pidnames[pid & 0x0f], bytecnt);
-					seqinfo->flags = DISPLAY_ATTRIBUTE_ABORTED;
-				}
-				break;
-				
-			default:
-				sprintf(seqinfo->textp, "PID %x unknown", pid);
-				seqinfo->flags = DISPLAY_ATTRIBUTE_ABORTED;
-				break;
-			}
-
-			return attach_sequence(firstseq, seqinfo);			
-		}
-
-		if (bytecnt == 0) {
-			pid = ulpi_get_data_group(pctx, seq);
-			data16 = 0;
-		} else if(bytecnt == 1) {
-			data16 |= (ulpi_get_data_group(pctx, seq) << 8);
-		} else if (bytecnt == 2) {
-			data16 |= ulpi_get_data_group(pctx, seq);
-		}
-		bytes[bytecnt] = ulpi_get_data_group(pctx, seq);
-		bytecnt++;
-		
-	}
- 	return firstseq;
-}
-
-struct sequence *ulpi_detect_reset(struct pctx *pctx, int seq)
-{
-	struct sequence *seqinfo;
-	uint64_t ts, ts2, ts1;
-	uint8_t ctrl;
-	int nextseq;
-	char buf[128];
-
-	nextseq = seq;
 	for(;;) {
-		nextseq = pctx->func.LAFindSeq(pctx->lactx, nextseq, 1, -1);
+		nextseq = pctx->func.LAFindSeq(pctx->lactx, seq, 1, -1);
+		if (nextseq == -1)
+			break;
+		seq = nextseq;
+		ctrl = pctx->func.LAGroupValue(pctx->lactx, seq, 1);
+		if (ctrl & ULPI_PID)
+			break;
 
-		if (nextseq < 0)
-			return 0;
-
-		ctrl = ulpi_get_ctrl_group(pctx, nextseq);
-		if (!ulpi_is_rxcmd(ctrl))
+		if (!(ctrl & ULPI_DATAVALID))
 			continue;
 
-		if ((ctrl & 3) != 0)
+		*buf++ = pctx->func.LAGroupValue(pctx->lactx, seq, 0);
+		if (len++ == maxlen)
 			break;
 	}
+	return len;
+}
 
-	pctx->func.LATimeStamp_ps(pctx->lactx, nextseq, &ts1);	
-	pctx->func.LATimeStamp_ps(pctx->lactx, seq, &ts2);
+uint8_t get_previous_pid(struct pctx *pctx, int startseq)
+{
+	int nextseq, seq = startseq;
+	uint32_t data, ctrl;
+	for(;;) {
+		nextseq = pctx->func.LAFindSeq(pctx->lactx, seq, -1, -1);
+		LogDebug(pctx, 8, "nextseq: %d\n", nextseq);
+		if (nextseq == -1)
+			break;
+		seq = nextseq;
+		ctrl = pctx->func.LAGroupValue(pctx->lactx, seq, 1);
+		if (!(ctrl & ULPI_PID)) {
+			LogDebug(pctx, 8, "%d: no PID\n", nextseq);
+			continue;
+		}
 
-	ts = ts1 - ts2;
-	if (ts < (3LL * 1000LL * 1000LL * 1000LL))
-		return NULL;
-		
-	pctx->func.LATimestamp_ps_ToText(pctx->lactx, &ts, buf, sizeof(buf));
-	seqinfo = get_sequence(pctx);
-	seqinfo->flags = DISPLAY_ATTRIBUTE_ABORTED;
-	sprintf(seqinfo->textp, "USB RESET [duration: %s]", buf);
-	return seqinfo;
+		data = pctx->func.LAGroupValue(pctx->lactx, seq, 0);
+		LogDebug(pctx, 8, "Data: %02X\n", data);
+		switch(data) {
+		case USB_PID_SETUP:
+		case USB_PID_IN:
+		case USB_PID_OUT:
+			return data;
+		default:
+			break;
+		}
+	}
+	return 0;
+}
+
+static const char *usb_setup_types[] = {
+	"Standard",
+	"Class",
+	"Vendor",
+	"Reserved"
+};
+
+static const char *usb_setup_recipient(uint8_t val)
+{
+	switch(val & 0x1f) {
+	case 0:
+		return "Device";
+	case 1:
+		return "Interface";
+	case 2:
+		return "Endpoint";
+	case 3:
+		return "Other";
+	default:
+		return "Reserved";
+	}
+}
+
+static const char *usb_setup_request(uint8_t request)
+{
+	switch(request) {
+	case 0:
+		return "GET_STATUS";
+	case 1:
+		return "CLEAR_FEATURE";
+	case 3:
+		return "SET_FEATURE";
+	case 5:
+		return "SET_ADDRESS";
+	case 6:
+		return "GET_DESCRIPTOR";
+	case 7:
+		return "SET_DESCRIPTOR";
+	case 8:
+		return "GET_CONFIGURATION";
+	case 9:
+		return "SET_CONFIGURATION";
+	default:
+		return "Unknown request";
+	}
+
+}
+
+static void dump_usb_setup_packet(struct pctx *pctx, struct sequence **firstseq,
+				  uint8_t *buf, int len, int seq)
+{
+	uint8_t request = buf[1];
+	uint16_t wValue = ((buf[3] << 8) | buf[2]);
+	uint16_t wIndex = ((buf[5] << 8) | buf[4]);
+	char *description = "Unknown";
+	char tmp[64];
+
+	switch(request) {
+	case 0: /* GET_STATUS */
+		break;
+	case 1: /* CLEAR_FEATURE */
+	case 3: /* SET_FEATURE */
+		switch(wValue) {
+		case 0:
+			description = "ENDPOINT_HALT (0x00)";
+			break;
+		case 1:
+			description = "DEVICE_REMOTE_WAKEUP (0x01)";
+			break;
+		case 2:
+			description = "TEST_MODE (0x02)";
+			break;
+		case 3:
+			description = "B_HNP_ENABLE (0x03)";
+			break;
+		case 4:
+			description = "A_HNP_SUPPORT (0x04)";
+			break;
+		case 5:
+			description = "A_ALT_HNP_SUPPORT (0x05)";
+			break;
+		case 6:
+			description = "DEBUG (0x06)";
+			break;
+		default:
+			snprintf(tmp, sizeof(tmp), "Unknown Feature %04X", wValue);
+			description = tmp;
+			break;
+		}
+		break;
+	case 5: /* SET_ADDRESS */
+		snprintf(tmp, sizeof(tmp), "%d", wValue);
+		description = tmp;
+		break;
+
+	case 6: /* GET DESCRIPTOR */
+	case 7: /* SET_DESCRIPTOR */
+		switch(wValue >> 8) {
+		case 1:
+			description = tmp;
+			snprintf(tmp, sizeof(tmp), "DEVICE %d", wValue & 0xff);;
+			break;
+		case 2:
+			description = tmp;
+			snprintf(tmp, sizeof(tmp), "CONFIGURATION %d", wValue & 0xff);;
+			break;
+		case 3:
+			description = tmp;
+			snprintf(tmp, sizeof(tmp), "STRING %d", wValue & 0xff);;
+			break;
+		case 4:
+			description = tmp;
+			snprintf(tmp, sizeof(tmp), "INTERFACE %d", wValue & 0xff);;
+			break;
+		case 5:
+			description = tmp;
+			snprintf(tmp, sizeof(tmp), "ENDPOINT %d", wValue & 0xff);;
+			break;
+		case 10:
+			description = "DEBUG";
+			break;
+		case 0x21:
+			description = "HID";
+			break;
+		case 0x22:
+			description = "REPORT";
+			break;
+		case 0x23:
+			description = "PHYSICAL";
+			break;
+		case 0x29:
+			description = "HUB";
+			break;
+		default:
+			sprintf(tmp, "Unknown descriptor 0x%04X", wValue);
+			description = tmp;
+			break;
+		}
+		break;
+
+	case 8: /* GET_CONFIGURATION */
+		description = "GET_CONFIGURATION";
+		break;
+	case 9: /* SET_CONFIGURATION */
+		description = tmp;
+		snprintf(tmp, sizeof(tmp), "SET_CONFIGURATION %d", wValue & 0xff);;
+		break;
+	default:
+		description = tmp;
+		snprintf(tmp, sizeof(tmp), "Unknown bRequest %04x", wValue);;
+		break;
+	}
+	sequence_printf(pctx, DISPLAY_ATTRIBUTE_DECODED,
+			firstseq, "%s %s %c->%c %s %s",
+			usb_setup_types[(buf[0] >> 5) & 3],
+			usb_setup_recipient(buf[0]),
+			buf[0] & 0x80 ? 'D' : 'H',
+			buf[0] & 0x80 ? 'H' : 'D',
+			usb_setup_request(request),
+			description);
+}
+
+struct cbw_s {
+	uint32_t sig;
+	uint32_t tag;
+	uint32_t length;
+	uint8_t flags;
+	uint8_t lun;
+	uint8_t cblength;
+	uint8_t cbwcb[16];
+};
+
+static int find_previous_cbw(struct pctx *pctx, uint32_t tag, int startseq, struct cbw_s *out, uint8_t *buf, int *maxlen)
+{
+	int seq, len, datalen = 0, tmplen;
+	uint32_t ctrl, data;
+
+	seq = startseq;
+	while((seq = pctx->func.LAFindSeq(pctx->lactx, seq, -1, -1)) > 0) {
+		ctrl = ulpi_get_ctrl_group(pctx, seq);
+		if (!(ctrl & ULPI_PID))
+			continue;
+
+		data = ulpi_get_data_group(pctx, seq);
+		switch(data) {
+		case USB_PID_DATA0:
+		case USB_PID_DATA1:
+		case USB_PID_DATA2:
+		case USB_PID_MDATA:
+			len = get_usb_packet(pctx, seq, (uint8_t *)out, sizeof(struct cbw_s));
+			if (len == 33 && out->sig == 0x43425355 && tag == out->tag) {
+				*maxlen = datalen;
+				return seq;
+			}
+			if (datalen < *maxlen) {
+				tmplen = get_usb_packet(pctx, seq, buf + datalen, *maxlen - datalen);
+				tmplen -= 2;
+				if (tmplen < 0)
+					tmplen = 0;
+				datalen += tmplen;
+			}
+			continue;
+		case USB_PID_NYET:
+		case USB_PID_NAK:
+		case USB_PID_STALL:
+			continue;
+		default:
+			continue;
+		}
+	}
+	return -1;
+}
+
+static void dump_msc_cbw(struct pctx *pctx, struct sequence **firstseq, uint8_t *buf, int len)
+{
+	struct cbw_s *cbw = (struct cbw_s *)buf;
+	sequence_printf(pctx, DISPLAY_ATTRIBUTE_HIGHLEVEL, firstseq,
+			"USB MSC CBW: Tag 0x%04X Length %d Flags %02X LUN %d", cbw->tag, cbw->length, cbw->flags,
+			cbw->lun);
+	dump_data_to_sequence(pctx, firstseq, cbw->cbwcb, cbw->cblength);
+	switch(cbw->cbwcb[0]) {
+	case 0x00:
+		sequence_printf(pctx, DISPLAY_ATTRIBUTE_HIGHLEVEL, firstseq, "SCSI TEST UNIT READY");
+		break;
+	case 0x03:
+		sequence_printf(pctx, DISPLAY_ATTRIBUTE_HIGHLEVEL, firstseq, "SCSI REQUEST SENSE");
+		break;
+	case 0x04:
+		sequence_printf(pctx, DISPLAY_ATTRIBUTE_HIGHLEVEL, firstseq, "SCSI FORMAT UNIT");
+		break;
+	case 0x08:
+		sequence_printf(pctx, DISPLAY_ATTRIBUTE_HIGHLEVEL, firstseq, "SCSI READ(6)");
+		break;
+	case 0x0a:
+		sequence_printf(pctx, DISPLAY_ATTRIBUTE_HIGHLEVEL, firstseq, "SCSI WRITE(6)");
+		break;
+	case 0x0b:
+		sequence_printf(pctx, DISPLAY_ATTRIBUTE_HIGHLEVEL, firstseq, "SCSI SEEK(6)");
+		break;
+	case 0x12:
+		sequence_printf(pctx, DISPLAY_ATTRIBUTE_HIGHLEVEL, firstseq, "SCSI INQUIRY");
+		break;
+	case 0x15:
+		sequence_printf(pctx, DISPLAY_ATTRIBUTE_HIGHLEVEL, firstseq, "SCSI MODE SELECT");
+		break;
+	case 0x1a:
+		sequence_printf(pctx, DISPLAY_ATTRIBUTE_HIGHLEVEL, firstseq, "SCSI MODE SENSE");
+		break;
+	case 0x1b:
+		sequence_printf(pctx, DISPLAY_ATTRIBUTE_HIGHLEVEL, firstseq, "SCSI START/STOP UNIT");
+		break;
+	case 0x1e:
+		sequence_printf(pctx, DISPLAY_ATTRIBUTE_HIGHLEVEL, firstseq, "SCSI PREVENT/ALLOW MEDIA REMOVAL");
+		break;
+	case 0x23:
+		sequence_printf(pctx, DISPLAY_ATTRIBUTE_HIGHLEVEL, firstseq, "SCSI READ FORMAT CAPACITY");
+		break;
+	case 0x25:
+		sequence_printf(pctx, DISPLAY_ATTRIBUTE_HIGHLEVEL, firstseq, "SCSI READ CAPACITY");
+		break;
+	case 0x28:
+		sequence_printf(pctx, DISPLAY_ATTRIBUTE_HIGHLEVEL, firstseq,
+				"SCSI READ(10): LUN %d, LBA %d, Length %d", cbw->cbwcb[1] >> 5,
+				(cbw->cbwcb[2] << 24) | (cbw->cbwcb[3] << 16) | (cbw->cbwcb[4] << 8) | (cbw->cbwcb[5]),
+				(cbw->cbwcb[7] << 8) | (cbw->cbwcb[8]));
+		break;
+	case 0x2a:
+		sequence_printf(pctx, DISPLAY_ATTRIBUTE_HIGHLEVEL, firstseq,
+				"SCSI WRITE(10): LUN %d, LBA %d, Length %d", cbw->cbwcb[1] >> 5,
+				(cbw->cbwcb[2] << 24) | (cbw->cbwcb[3] << 16) | (cbw->cbwcb[4] << 8) | (cbw->cbwcb[5]),
+				(cbw->cbwcb[7] << 8) | (cbw->cbwcb[8]));
+		break;
+	case 0x2b:
+		sequence_printf(pctx, DISPLAY_ATTRIBUTE_HIGHLEVEL, firstseq, "SCSI SEEK");
+		break;
+	case 0x2c:
+		sequence_printf(pctx, DISPLAY_ATTRIBUTE_HIGHLEVEL, firstseq, "SCSI ERASE");
+		break;
+
+	}
+}
+
+struct csw_s {
+	uint32_t sig;
+	uint32_t tag;
+	uint32_t dataresidue;
+	uint8_t status;
+};
+
+static void dump_msc_csw(struct pctx *pctx, struct sequence **firstseq, int startseq, uint8_t *buf, int len)
+{
+	struct csw_s *csw = (struct csw_s *)buf;
+	struct cbw_s cbw;
+	uint8_t cbw_buf[4096];
+	int seq, cbw_len = sizeof(cbw_buf);
+
+	sequence_printf(pctx, csw->status ? DISPLAY_ATTRIBUTE_ABORTED : DISPLAY_ATTRIBUTE_HIGHLEVEL, firstseq,
+			"USB MSC CSW: Tag 0x%04X Data Residue %d, Status %x", csw->tag,
+			csw->dataresidue, csw->status);
+
+	if (csw->status)
+		return;
+
+	if ((seq = find_previous_cbw(pctx, csw->tag, startseq, &cbw, cbw_buf, &cbw_len)) != -1) {
+		switch(cbw.cbwcb[0]) {
+		case 0x03:
+			sequence_printf(pctx, DISPLAY_ATTRIBUTE_HIGHLEVEL, firstseq,
+					"REQUEST SENSE: %02X/%02X", cbw_buf[12], cbw_buf[13]);
+			break;
+		case 0x25:
+			sequence_printf(pctx, DISPLAY_ATTRIBUTE_HIGHLEVEL, firstseq,
+					"READ CAPACITY: LBA %lu, SECTOR SIZE: %lu",
+					cbw_buf[3] | cbw_buf[2] << 8 | cbw_buf[1] << 16 | cbw_buf[0] << 24,
+					cbw_buf[7] | cbw_buf[6] << 8 | cbw_buf[5] << 16 | cbw_buf[4] << 24);
+					break;
+		case 0x12:
+			sequence_printf(pctx, DISPLAY_ATTRIBUTE_HIGHLEVEL, firstseq,
+					"INQUIRY");
+			break;
+		case 0x1a:
+			sequence_printf(pctx, DISPLAY_ATTRIBUTE_HIGHLEVEL, firstseq,
+					"MODE SENSE");
+			switch(cbw.cbwcb[2]) {
+			case 0x08:
+				sequence_printf(pctx, DISPLAY_ATTRIBUTE_HIGHLEVEL, firstseq,
+						"  CACHING");
+				break;
+			default:
+				break;
+			}
+			break;
+		case 0x08:
+			sequence_printf(pctx, DISPLAY_ATTRIBUTE_HIGHLEVEL, firstseq,
+					"READ(6)");
+			break;
+		case 0x0a:
+			sequence_printf(pctx, DISPLAY_ATTRIBUTE_HIGHLEVEL, firstseq,
+					"WRITE(6)");
+			break;
+
+		case 0x28:
+			sequence_printf(pctx, DISPLAY_ATTRIBUTE_HIGHLEVEL, firstseq,
+					"READ(10)");
+			break;
+
+		case 0x2a:
+			sequence_printf(pctx, DISPLAY_ATTRIBUTE_HIGHLEVEL, firstseq,
+					"WRITE(10)");
+			break;
+
+		default:
+			sequence_printf(pctx, DISPLAY_ATTRIBUTE_HIGHLEVEL, firstseq,
+					"UNKNOWN CMD %02X", cbw.cbwcb[0]);
+			break;
+		}
+		dump_data_to_sequence(pctx, firstseq, cbw_buf, cbw_len);
+	}
+}
+
+static void decode_usb_packet(struct pctx *pctx, struct sequence **firstseq,
+			      uint8_t *buf, int len, int seq, uint8_t pid)
+{
+	uint8_t ppid;
+	char *token = "UNKNOWN";
+	struct sequence *sequence;
+
+	if ((pid & 0x0f) != (~(pid >> 4) & 0xf)) {
+		sequence_printf(pctx, DISPLAY_ATTRIBUTE_ABORTED, firstseq,
+				"*** INVALID PID: %02X ***", pid);
+		return;
+	}
+	sequence_printf(pctx, DISPLAY_ATTRIBUTE_DECODED, firstseq,
+			"%s", pidnames[pid & 0x0f]);
+
+	if (*firstseq) {
+		(*firstseq)->group_values[GROUP_PID].value = pid & 0x0f;
+		(*firstseq)->group_values[GROUP_PID].mask = 0;
+		if (len > 2) {
+			(*firstseq)->group_values[GROUP_DATA_SIZE].value = len - 2;
+			(*firstseq)->group_values[GROUP_DATA_SIZE].mask = 0;
+		}
+	}
+
+	switch(pid) {
+	case USB_PID_DATA0:
+	case USB_PID_DATA1:
+	case USB_PID_DATA2:
+	case USB_PID_MDATA:
+		if (len < 2) {
+			sequence_printf(pctx, DISPLAY_ATTRIBUTE_ABORTED, firstseq,
+					"short packet");
+			break;
+		}
+		len -= 2;
+		ppid = get_previous_pid(pctx, seq);
+		if (ppid == USB_PID_SETUP)
+			dump_usb_setup_packet(pctx,  firstseq, buf, len, seq);
+
+		if (len >= 31 && !memcmp(buf, "USBC", 4))
+			dump_msc_cbw(pctx, firstseq, buf, len);
+		else if (len >= 13 && !memcmp(buf, "USBS", 4))
+			dump_msc_csw(pctx, firstseq, seq, buf, len);
+		else if (pctx->show_buffers && len > 0)
+			dump_data_to_sequence(pctx, firstseq, buf, len);
+		break;
+
+	case USB_PID_SOF:
+		if (len < 2)
+			sequence_printf(pctx, DISPLAY_ATTRIBUTE_ABORTED, firstseq,
+					"short packet");
+		break;
+
+	case USB_PID_SETUP:
+	case USB_PID_IN:
+	case USB_PID_OUT:
+
+		if (len < 2) {
+			sequence_printf(pctx, DISPLAY_ATTRIBUTE_ABORTED, firstseq,
+					"  short packet", token);
+			break;
+		}
+
+		if (*firstseq) {
+			(*firstseq)->group_values[GROUP_ADDR].value = buf[0] & 0x7f;
+			(*firstseq)->group_values[GROUP_ADDR].mask = 0;
+			(*firstseq)->group_values[GROUP_EP].value = (((buf[1] & 0x07) << 1) | ((buf[0] & 0x80) >> 7));
+			(*firstseq)->group_values[GROUP_EP].mask = 0;
+		}
+		break;
+	default:
+		break;
+	}
+
 }
 
 struct sequence *ParseSeq(struct pctx *pctx, int seq)
 {
-	struct sequence *seqinfo = NULL;
-	uint8_t data, ctrl, pctrl, linestate, rxevent;
-	int startseq, prevseq, minseq, maxseq;
-
+	struct sequence *firstseq = NULL;
+	uint8_t ppid, data, ctrl;
+	int startseq, len;
+	uint8_t buf[4096];
 
         LogDebug(pctx, 8, "ParseSeq %d\n", seq);
 
@@ -536,86 +843,47 @@ struct sequence *ParseSeq(struct pctx *pctx, int seq)
 
         pctx->displayattribute = pctx->func.LAInfo(pctx->lactx, TLA_INFO_DISPLAY_ATTRIBUTE, -1);
 
-	prevseq = pctx->func.LAFindSeq(pctx->lactx, seq, -1, -1);
-	if (prevseq < 0)
+	ctrl = pctx->func.LAGroupValue(pctx->lactx, seq, 1);
+
+	if (!(ctrl & ULPI_PID))
 		return NULL;
 
-	pctrl = pctx->func.LAGroupValue(pctx->lactx, prevseq, 1);
-	ctrl = pctx->func.LAGroupValue(pctx->lactx, seq, 1);
 	data = pctx->func.LAGroupValue(pctx->lactx, seq, 0);
 
-	if ((ctrl & (ULPI_NXT|ULPI_DIR)) == ULPI_DIR &&
-	    ((data & 3) == 0) &&
-	    (seqinfo = ulpi_detect_reset(pctx, seq)))
-		return seqinfo;
+	if (data == USB_PID_SOF && !pctx->show_sof)
+		return NULL;
 
-	if (!(pctx->lastctrl & ULPI_NXT)) {
-		if (pctx->lastdata == data &&
-		    pctx->lastctrl == ctrl)
-			return NULL;
-	}
+	if (data == USB_PID_IN && !pctx->show_in)
+		return NULL;
 
-	pctx->lastctrl = ctrl;
-	pctx->lastdata = data;
+	if (data == USB_PID_OUT && !pctx->show_out)
+		return NULL;
 
-	if ((pctrl & ULPI_DIR) != (ctrl & ULPI_DIR)) {
-		seqinfo = get_sequence(pctx);	
-		seqinfo->flags = DISPLAY_ATTRIBUTE_ALL;
-		sprintf(seqinfo->textp, "TURNAROUND");
-		return seqinfo;
-		
-	}
+	if (data == USB_PID_NAK && !pctx->show_nak)
+		return NULL;
 
-	if (!(ctrl & ULPI_DIR)) {
-		seqinfo = get_sequence(pctx);	
-		seqinfo->flags = DISPLAY_ATTRIBUTE_DECODED;
-		if (!(ctrl & ULPI_NXT)) {
-			switch((data >> 6) & 3) {
-			case 0:
-				seqinfo->flags = DISPLAY_ATTRIBUTE_ALL;
-				sprintf(seqinfo->textp, "NOP COMMAND");
-				break;
-			case 1:
-				sprintf(seqinfo->textp, "TRANSMIT COMMAND");
-				break;
-			case 2:
-				sprintf(seqinfo->textp, "REGWRITE COMMAND");
-				break;
-			case 3:
-				sprintf(seqinfo->textp, "REGREAD COMMAND");
-				break;
-			}
-		} else {
-			sprintf(seqinfo->textp, "COMMAND DATA");
-		}
-		return seqinfo;		
-	}
+	if (data == USB_PID_ACK && !pctx->show_ack)
+		return NULL;
 
-	if ((ctrl & (ULPI_DIR|ULPI_NXT)) == ULPI_DIR) {
-		seqinfo = get_sequence(pctx);	
-		seqinfo->flags = DISPLAY_ATTRIBUTE_ALL;
+	if (data == USB_PID_NYET && !pctx->show_nyet)
+		return NULL;
 
-		linestate = data & 3;
-		rxevent = (data >> 4) & 3;
+	if (data == USB_PID_SETUP && !pctx->show_setup)
+		return NULL;
 
-		if (rxevent == ULPI_EVENT_NONE) {
-			startseq = ulpi_find_start_of_packet(pctx, seq);
-			if (startseq > 0) {
-				seqinfo->next = ulpi_decode_packet(pctx, startseq);
-			}
-		}
-		sprintf(seqinfo->textp, "RXCMD, linestate %s, event %s",
-			linestates[linestate], rxevents[rxevent]);
-		return seqinfo;
-	}
+	if (data == USB_PID_STALL && !pctx->show_stall)
+		return NULL;
 
-	if ((ctrl & ULPI_DIR) && (ctrl & ULPI_NXT)) {
-		seqinfo = get_sequence(pctx);	
-		seqinfo->flags = DISPLAY_ATTRIBUTE_DECODED;
-		sprintf(seqinfo->textp, "USB RX byte");
-		return seqinfo;
-	}
-	return NULL;
+	if (data == USB_PID_PING && !pctx->show_ping)
+		return NULL;
+
+	if ((data == USB_PID_DATA0 || data == USB_PID_DATA1 || data == USB_PID_DATA2 || data == USB_PID_MDATA) 
+	    && !pctx->show_data)
+		return NULL;
+
+	len = get_usb_packet(pctx, seq, buf, sizeof(buf));
+	decode_usb_packet(pctx, &firstseq, buf, len, seq, data);
+	return firstseq;
 }
 
 int ParseMarkNext(struct pctx *pctx, int seq, int a3)
@@ -726,7 +994,7 @@ int ParseModeGetPut(struct pctx *pctx, int16_t mode, int value, int request)
                 pctx->func.LAInvalidate(pctx->lactx, -1, firstseq, lastseq);
 
                 switch(mode) {
-                case 0:
+                case SHOW_SOF:
                         if (request == 1)
                                 return 1;
 
@@ -734,7 +1002,61 @@ int ParseModeGetPut(struct pctx *pctx, int16_t mode, int value, int request)
                                 pctx->show_sof = value;
                         value = pctx->show_sof;
                         break;
-                case 1:
+
+                case SHOW_IN:
+                        if (request == 1)
+                                return 1;
+
+                        if (request == 2)
+                                pctx->show_in = value;
+                        value = pctx->show_in;
+                        break;
+
+                case SHOW_OUT:
+                        if (request == 1)
+                                return 1;
+
+                        if (request == 2)
+                                pctx->show_out = value;
+                        value = pctx->show_out;
+                        break;
+
+                case SHOW_NAK:
+                        if (request == 1)
+                                return 1;
+
+                        if (request == 2)
+                                pctx->show_nak = value;
+                        value = pctx->show_nak;
+                        break;
+                case SHOW_ACK:
+                        if (request == 1)
+                                return 1;
+
+                        if (request == 2)
+                                pctx->show_ack = value;
+                        value = pctx->show_ack;
+                        break;
+
+                case SHOW_NYET:
+                        if (request == 1)
+                                return 1;
+
+                        if (request == 2)
+                                pctx->show_nyet = value;
+                        value = pctx->show_nyet;
+                        break;
+
+                case SHOW_SETUP:
+                        if (request == 1)
+                                return 1;
+
+                        if (request == 2)
+                                pctx->show_setup = value;
+                        value = pctx->show_setup;
+                        break;
+
+                case SHOW_BUF:
                         if (request == 1)
                                 return 1;
 
@@ -742,6 +1064,35 @@ int ParseModeGetPut(struct pctx *pctx, int16_t mode, int value, int request)
                                 pctx->show_buffers = value;
                         value = pctx->show_buffers;
                         break;
+
+		case SHOW_DATA:
+                        if (request == 1)
+                                return 1;
+
+                        if (request == 2)
+                                pctx->show_data = value;
+                        value = pctx->show_data;
+                        break;
+
+		case SHOW_PING:
+                        if (request == 1)
+                                return 1;
+
+                        if (request == 2)
+                                pctx->show_ping = value;
+                        value = pctx->show_ping;
+                        break;
+
+		case SHOW_STALL:
+                        if (request == 1)
+                                return 1;
+
+                        if (request == 2)
+                                pctx->show_stall = value;
+                        value = pctx->show_stall;
+                        break;
+
+
                 default:
                         break;
                 }
@@ -759,21 +1110,26 @@ int ParseStringModeGetPut_(struct pctx *pctx, int mode, int value, int request)
 
 struct pctx *ParseReinit(struct pctx *pctx, struct lactx *lactx, struct lafunc *func)
 {
-	struct pctx *ret = NULL;
-
-        LogDebug(ret, 8, "%s(%p, %p, %p)\n", __FUNCTION__, pctx, lactx, func);
-
-	if (pctx)
-                return pctx;
-
-	if (!(ret = func->rda_calloc(1, sizeof(struct pctx)))) {
+	if (!pctx && !(pctx = func->rda_calloc(1, sizeof(struct pctx)))) {
 		func->LAError(0, 9, "Out of Memory");
 		return NULL;
 	}
 
-	ret->lactx = lactx;
-        memcpy(&ret->func, func, sizeof(struct lafunc));
-	return ret;
+        LogDebug(pctx, 8, "%s(%p, %p, %p)\n", __FUNCTION__, pctx, lactx, func);
+
+	pctx->show_sof = 1;
+	pctx->show_in = 1;
+	pctx->show_out = 1;
+	pctx->show_nak = 1;
+	pctx->show_ack = 1;
+	pctx->show_nyet = 1;
+	pctx->show_ping = 1;
+	pctx->show_stall = 1;
+	pctx->show_data = 1;
+	pctx->show_setup = 1;
+	pctx->lactx = lactx;
+        memcpy(&pctx->func, func, sizeof(struct lafunc));
+	return pctx;
 }
 
 int ParseDisasmReinit(struct pctx *pctx, int request)
