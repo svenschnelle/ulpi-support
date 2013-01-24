@@ -3,7 +3,7 @@ CFLAGS=-Wextra -Wall -O2 -Wno-unused -ggdb
 
 all: ULPI.dll
 
-ULPI.dll:	ULPI.c ULPI.h Makefile
+ULPI.dll:	ULPI.c ULPI.h Makefile TLAPlugin.h
 		$(CC) $(CFLAGS) -shared -o $@ $<
 
 install:	ULPI.dll ULPI.tla PID.tsf ULPI_T.cop ULPI_std.clk
