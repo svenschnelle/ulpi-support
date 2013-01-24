@@ -6,14 +6,15 @@
 
 #define SEQUENCE_TEXT_WIDTH 128
 
-#define GROUP(name, type, _width, flags, symbolfile) \
+#define GROUP(name, type, _width, _flags, _radix, symbolfile)	\
 	{ .groupname = name,\
 	  .grouptype = type,\
-	  .width = flags,\
+	  .width = _flags,\
 	  .default_columns = _width,\
 	  .default_symbolfile = symbolfile, \
 	  .field_7 = type == GROUP_TYPE_MNEMONIC ? 1 : 0, \
 	  .field_16 = -1,\
+	  .default_radix = _radix \
 	  }
 
 enum TLA_INFO {
@@ -45,6 +46,22 @@ struct businfo {
         uint16_t groupcount;
 	void *val18;
 	int val1c;
+};
+
+struct groupinfo {
+	char *groupname;
+	char field_4;
+	char field_5;
+	char grouptype;
+	char field_7;
+	uint16_t width;
+	uint16_t default_columns;
+	int default_radix;
+        const char *default_symbolfile;
+        char likegroup;
+        char field_15;
+        int16_t field_16;
+        int16_t field_18;
 };
 
 struct modeinfo {
@@ -143,22 +160,6 @@ struct lafunc {
 	void (*LASystemName)(struct lactx *lactx, int bus, int modnum, char *out, int buflen);
 	void (*LASystemPath)(struct lactx *lactx, int bus, int modnum, char *out, int buflen);
 	void *field_DC;
-};
-
-struct groupinfo {
-	char *groupname;
-	char field_4;
-	char field_5;
-	char grouptype;
-	char field_7;
-	uint16_t width;
-	uint16_t default_columns;
-        int field_C;
-        const char *default_symbolfile;
-        char likegroup;
-        char field_15;
-        int16_t field_16;
-        int16_t field_18;
 };
 
 enum MODEINFO {
