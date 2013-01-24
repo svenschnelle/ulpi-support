@@ -364,7 +364,7 @@ static int get_usb_packet(struct pctx *pctx, int startseq, uint8_t *buf, int max
 
 uint8_t get_previous_pid(struct pctx *pctx, int startseq)
 {
-	int nextseq, seq = startseq;
+	int nextseq, seq = startseq, seq2;
 	uint32_t data, ctrl;
 	for(;;) {
 		nextseq = pctx->func.LAFindSeq(pctx->lactx, seq, -1, -1);
@@ -378,7 +378,14 @@ uint8_t get_previous_pid(struct pctx *pctx, int startseq)
 			continue;
 		}
 
-		data = pctx->func.LAGroupValue(pctx->lactx, seq, 0);
+		if (ctrl & ULPI_DATAVALID) {
+			data = pctx->func.LAGroupValue(pctx->lactx, seq, 0);
+		} else {
+			seq2 = pctx->func.LAFindSeq(pctx->lactx, seq, 1, -1);
+			if (seq2 < 0)
+				break;
+			data = pctx->func.LAGroupValue(pctx->lactx, seq2, 0);
+		}
 		LogDebug(pctx, 8, "Data: %02X\n", data);
 		switch(data) {
 		case USB_PID_SETUP:
@@ -848,6 +855,11 @@ struct sequence *ParseSeq(struct pctx *pctx, int seq)
 	if (!(ctrl & ULPI_PID))
 		return NULL;
 
+	if (!(ctrl & ULPI_DATAVALID)) {
+		seq = pctx->func.LAFindSeq(pctx->lactx, seq, 1, -1);
+		if (seq < 0)
+			return NULL;
+	}
 	data = pctx->func.LAGroupValue(pctx->lactx, seq, 0);
 
 	if (data == USB_PID_SOF && !pctx->show_sof)
