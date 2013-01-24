@@ -1001,106 +1001,79 @@ int ParseModeGetPut(struct pctx *pctx, int16_t mode, int value, int request)
                 LogDebug(pctx, 5, "%s: %d (%s), %d (%s)\n", __FUNCTION__,
                          request, modeinfo[mode].name, value, onoff[value]);
 
-                firstseq = pctx->func.LAInfo(pctx->lactx, TLA_INFO_FIRST_SEQUENCE, -1);
-                lastseq = pctx->func.LAInfo(pctx->lactx, TLA_INFO_LAST_SEQUENCE, -1);
-                pctx->func.LAInvalidate(pctx->lactx, -1, firstseq, lastseq);
+		if (request == 1) {
+			firstseq = pctx->func.LAInfo(pctx->lactx, TLA_INFO_FIRST_SEQUENCE, -1);
+			lastseq = pctx->func.LAInfo(pctx->lactx, TLA_INFO_LAST_SEQUENCE, -1);
+			pctx->func.LAInvalidate(pctx->lactx, -1, firstseq, lastseq);
+			return 1;
+		}
+
+		if (request != 2 && request != 0)
+			return 0;
 
                 switch(mode) {
                 case SHOW_SOF:
-                        if (request == 1)
-                                return 1;
-
-                        if (request == 2)
-                                pctx->show_sof = value;
+			if (request == 2)
+				pctx->show_sof = value;
                         value = pctx->show_sof;
                         break;
 
                 case SHOW_IN:
-                        if (request == 1)
-                                return 1;
-
-                        if (request == 2)
-                                pctx->show_in = value;
+			if (request == 2)
+				pctx->show_in = value;
                         value = pctx->show_in;
                         break;
 
                 case SHOW_OUT:
-                        if (request == 1)
-                                return 1;
-
-                        if (request == 2)
-                                pctx->show_out = value;
+			if (request == 2)
+				pctx->show_out = value;
                         value = pctx->show_out;
                         break;
 
                 case SHOW_NAK:
-                        if (request == 1)
-                                return 1;
-
-                        if (request == 2)
-                                pctx->show_nak = value;
+			if (request == 2)
+				pctx->show_nak = value;
                         value = pctx->show_nak;
                         break;
                 case SHOW_ACK:
-                        if (request == 1)
-                                return 1;
-
-                        if (request == 2)
-                                pctx->show_ack = value;
+			if (request == 2)
+				pctx->show_ack = value;
                         value = pctx->show_ack;
                         break;
 
                 case SHOW_NYET:
-                        if (request == 1)
-                                return 1;
-
-                        if (request == 2)
-                                pctx->show_nyet = value;
+			if (request == 2)
+				pctx->show_nyet = value;
                         value = pctx->show_nyet;
                         break;
 
                 case SHOW_SETUP:
-                        if (request == 1)
-                                return 1;
-
-                        if (request == 2)
-                                pctx->show_setup = value;
+			if (request == 2)
+				pctx->show_setup = value;
                         value = pctx->show_setup;
                         break;
 
                 case SHOW_BUF:
-                        if (request == 1)
-                                return 1;
-
-                        if (request == 2)
-                                pctx->show_buffers = value;
+			if (request == 2)
+				pctx->show_buffers = value;
                         value = pctx->show_buffers;
                         break;
 
 		case SHOW_DATA:
-                        if (request == 1)
-                                return 1;
-
-                        if (request == 2)
-                                pctx->show_data = value;
+			if (request == 2)
+				pctx->show_data = value;
                         value = pctx->show_data;
                         break;
 
 		case SHOW_PING:
-                        if (request == 1)
-                                return 1;
-
-                        if (request == 2)
-                                pctx->show_ping = value;
+			if (request == 2)
+				pctx->show_ping = value;
                         value = pctx->show_ping;
                         break;
 
 		case SHOW_STALL:
-                        if (request == 1)
-                                return 1;
-
-                        if (request == 2)
-                                pctx->show_stall = value;
+			if (request == 2)
+				pctx->show_stall = value;
                         value = pctx->show_stall;
                         break;
 
