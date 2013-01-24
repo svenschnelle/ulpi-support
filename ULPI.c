@@ -1110,7 +1110,10 @@ int ParseStringModeGetPut_(struct pctx *pctx, int mode, int value, int request)
 
 struct pctx *ParseReinit(struct pctx *pctx, struct lactx *lactx, struct lafunc *func)
 {
-	if (!pctx && !(pctx = func->rda_calloc(1, sizeof(struct pctx)))) {
+	if (pctx)
+		return pctx;
+
+	if (!(pctx = func->rda_calloc(1, sizeof(struct pctx)))) {
 		func->LAError(0, 9, "Out of Memory");
 		return NULL;
 	}
