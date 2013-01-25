@@ -142,21 +142,21 @@ char *onoff[] = { "Off", "On", NULL, NULL };
 #define SHOW_ACK 5
 #define SHOW_NYET 6
 #define SHOW_DATA 7
-#define SHOW_STALL 8
-#define SHOW_PING 9
+#define SHOW_PING 8
+#define SHOW_STALL 9
 #define SHOW_BUF 10
 
-struct modeinfo modeinfo[] = { { "Show SOF packets", onoff, SHOW_SOF, 0 },
-			       { "Show IN packets", onoff, SHOW_IN, 0 },
-			       { "Show OUT packets", onoff, SHOW_OUT, 0 },
-			       { "Show SETUP packets", onoff, SHOW_SETUP, 0 },
-			       { "Show NAK packets", onoff, SHOW_NAK, 0 },
-			       { "Show ACK packets", onoff, SHOW_ACK, 0 },
-			       { "Show NYET packets", onoff, SHOW_NYET, 0 },
-			       { "Show DATA packets", onoff, SHOW_DATA, 0 },
-			       { "Show PING packets", onoff, SHOW_PING, 0 },
-			       { "Show STALL packets", onoff, SHOW_STALL, 0 },
-                               { "Show buffers", onoff, SHOW_BUF, 0 } };
+struct modeinfo modeinfo[] = { { "Show SOF packets", onoff, 0, 0, 0, 0 },
+			       { "Show IN packets", onoff, 0, 0, 0, 0, },
+			       { "Show OUT packets", onoff, 0, 0, 0, 0 },
+			       { "Show SETUP packets", onoff, 0, 0, 0, 0 },
+			       { "Show NAK packets", onoff, 0, 0, 0, 0 },
+			       { "Show ACK packets", onoff, 0, 0, 0, 0 },
+			       { "Show NYET packets", onoff, 0, 0, 0, 0 },
+			       { "Show DATA packets", onoff, 0, 0, 0, 0 },
+			       { "Show PING packets", onoff, 0, 0, 0, 0 },
+			       { "Show STALL packets", onoff, 0L, 0, 0, 0 },
+                               { "Show buffers", onoff, 0, 0, 0, 0 } };
 
 struct stringmodevalues stringmodevalues[] = { { "All cycles", DISPLAY_ATTRIBUTE_ALL },
                                                { "Decoded cycles", DISPLAY_ATTRIBUTE_DECODED },
@@ -898,33 +898,40 @@ struct sequence *ParseSeq(struct pctx *pctx, int seq)
 	return firstseq;
 }
 
-int ParseMarkNext(struct pctx *pctx, int seq, int a3)
+int ParseMarkNext(struct pctx *pctx, int seq, int *markout)
 {
-	LogDebug(pctx, 9, "%s: sequence %d, a3 %d\n", __FUNCTION__, seq, a3);
-	return 0;
+	LogDebug(pctx, 5, "%s: sequence %d\n", __FUNCTION__, seq);
+	/* returns sequence */
+	return -1;
 }
 
-int ParseMarkSet(struct pctx *pctx, int seq, int a3)
+void ParseMarkSet(struct pctx *pctx, int seq, int mark)
 {
-	LogDebug(pctx, 9, "%s\n", __FUNCTION__);
-	return 0;
+	LogDebug(pctx, 5, "%s: Sequence %d, Mark %d\n", __FUNCTION__, seq, mark);
 }
 
 int ParseMarkGet(struct pctx *pctx, int seq)
 {
-	LogDebug(pctx, 9, "%s: sequence %d\n", __FUNCTION__, seq);
+	LogDebug(pctx, 5, "%s: sequence %d\n", __FUNCTION__, seq);
+	/* returns mark at seq */
 	return 0;
 }
 
+static char *mark_names[] = { "Mark 1", "Mark 2", "Mark 4", "Mark 8", NULL };
+static int mark_values[] = { 1, 2, 4, 8 };
 
-int ParseMarkMenu(struct pctx *pctx, int seq, char ***names, char **entries, char **val)
+int ParseMarkMenu(struct pctx *pctx, int seq, char ***names, int **values, int *mark)
 {
-        return 0;
+	LogDebug(pctx, 5, "%s: sequence %d\n", __FUNCTION__, seq);
+	*names = mark_names;
+	*value = mark_values;
+	*mark = 0;
+        return ARRAY_SIZE(mark_names);
 }
 
 int ParseInfo(struct pctx *pctx, unsigned int request)
 {
-	LogDebug(pctx, 8, "%s: %s\n", __FUNCTION__,
+	LogDebug(pctx, 5, "%s: %s\n", __FUNCTION__,
                  request > ARRAY_SIZE(modeinfo_names) ? "invalid" : modeinfo_names[request]);
 
 	switch(request) {
@@ -953,14 +960,23 @@ int ParseExtInfo_(struct pctx *pctx, int request, void *out)
                 *(struct stringmodename **)out = &stringmodename;
                 return 1;
         case 1:
+		/* num segments for ParseMark[GS]etSegmented */
+		return 1;
         case 2:
-/*        case 3:
-        case 4:
+
+        case 3:
+	  /* maybe some String Mode/ChoiceList support? */
+		*(int *)out = 1;
+		return 1;
+	  /* case 4:
         case 5:*/
         case 7:
+		/* maybe disassemble accross gaps */
                 *(int *)out = 1;
                 return 1;
-		/*	case 8: Subdisasm Functable size */
+	case 8:
+		/* Subdisasm Functable size */
+		return 0;
 
         default:
                 return 0;
@@ -1086,10 +1102,10 @@ int ParseModeGetPut(struct pctx *pctx, int16_t mode, int value, int request)
 }
 
 
-int ParseStringModeGetPut_(struct pctx *pctx, int mode, int value, int request)
+char *ParseStringModeGetPut_(struct pctx *pctx, int mode, char *value, int request)
 {
-	LogDebug(pctx, 8, "%s: %d (%s), %d (%s)\n", __FUNCTION__,
-                 request, modeinfo[mode].name, value, onoff[value]);
+	LogDebug(pctx, 5, "%s: %d (%s), [%s]\n", __FUNCTION__,
+                 request, modeinfo[mode].name, value);
 	return value;
 }
 

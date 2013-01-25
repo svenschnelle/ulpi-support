@@ -64,11 +64,21 @@ struct groupinfo {
         int16_t field_18;
 };
 
+/* mode:
+   0 - choicelist / numeric (depending on options value)
+   1 - numeric
+   2 - choicelist?
+   3 - string
+   4 - filename
+   5 - Button
+*/
 struct modeinfo {
 	char *name;
-	char **options;
-	int val1;
-	int val2;
+	void *options;
+	int length;
+	int mode;
+	int radix;
+	int symbolic_radix;
 };
 
 struct stringmodevalues {
@@ -181,10 +191,10 @@ typedef enum {
 __declspec(dllexport) struct pctx *ParseReinit(struct pctx *pctx, struct lactx *lactx, struct lafunc *func);
 __declspec(dllexport) int ParseFinish(struct pctx *pctx);
 __declspec(dllexport) int ParseInfo(struct pctx *pctx, unsigned int request);
-__declspec(dllexport) int ParseMarkMenu(struct pctx *, int seq, char ***, char **, char **);
+__declspec(dllexport) int ParseMarkMenu(struct pctx *, int seq, char ***, int **, int *);
 __declspec(dllexport) int ParseMarkGet(struct pctx *pctx, int seq);
-__declspec(dllexport) int ParseMarkSet(struct pctx *pctx, int seq, int);
-__declspec(dllexport) int ParseMarkNext(struct pctx *pctx, int seq, int);
+__declspec(dllexport) void ParseMarkSet(struct pctx *pctx, int seq, int mark);
+__declspec(dllexport) int ParseMarkNext(struct pctx *pctx, int seq, int *mark);
 __declspec(dllexport) int ParseModeGetPut(struct pctx *pctx, int16_t mode, int, int request);
 __declspec(dllexport) struct sequence *ParseSeq(struct pctx *, int seq);
 __declspec(dllexport) struct businfo *ParseBusInfo(struct pctx *, uint16_t bus);
@@ -192,6 +202,6 @@ __declspec(dllexport) struct modeinfo *ParseModeInfo(struct pctx *pctx, uint16_t
 __declspec(dllexport) struct groupinfo *ParseGroupInfo(struct pctx *pctx, uint16_t group);
 __declspec(dllexport) int ParseDisasmReinit(struct pctx *, int request);
 __declspec(dllexport) int ParseExtInfo_(struct pctx *, int request, void *out);
-__declspec(dllexport) int ParseStringModeGetPut_(struct pctx *pctx, int mode, int value, int request);
+__declspec(dllexport) char *ParseStringModeGetPut_(struct pctx *pctx, int mode, char *value, int request);
 
 #endif
