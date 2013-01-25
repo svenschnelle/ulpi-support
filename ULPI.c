@@ -63,14 +63,6 @@ static const char *linestates[] = {
 	"SE1"
 };
 
-#define ULPI_EVENT(_x) (((_x) >> 4) & 3)
-
-static const char *rxevents[] = {
-	"NONE",
-	"RXACTIVE",
-	"RXACTIVE, RXERROR",
-	"HOSTDISCONNECT"
-};
 
 #define ULPI_DIR 0x01
 #define ULPI_NXT 0x02
@@ -97,11 +89,6 @@ typedef enum {
 	USB_PID_STALL=0x1e,
 	USB_PID_MDATA=0x0f,
 } usb_pid_t;
-
-#define ULPI_EVENT_NONE 0
-#define ULPI_EVENT_RXACTIVE 1
-#define ULPI_EVENT_RXERROR 2
-#define ULPI_EVENT_HOSTDISCONNECT 3
 
 typedef enum {
 	ULPI_GROUP_DATA=0,
@@ -133,6 +120,7 @@ struct groupinfo groupinfo[] = {
 struct businfo businfo[] = { { .groupcount = ARRAY_SIZE(groupinfo) } };
 
 char *onoff[] = { "Off", "On", NULL, NULL };
+char *testonoff[] = { "Off", "On", "Option 2", "Option 3", "Option 4", NULL };
 
 #define SHOW_SOF 0
 #define SHOW_IN 1
@@ -1092,8 +1080,7 @@ int ParseModeGetPut(struct pctx *pctx, int16_t mode, int value, int request)
 				pctx->show_stall = value;
                         value = pctx->show_stall;
                         break;
-
-
+			
                 default:
                         break;
                 }
